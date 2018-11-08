@@ -241,6 +241,132 @@ class AttentionRNNWrapper(Wrapper):
         base_config = super(AttentionRNNWrapper, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))
 
+class AttentionScaledDotProduct(Layer):
+    """
+    [Ref] Attention is all you need. https://arxiv.org/pdf/1706.03762.pdf
+    注意力，对Query和Key求点积，并利用Query的维度k的平方根对点积进行缩放。Query、Key及value可以是同样的，也可以不一样
+    """
+    def __init__(self, scale=True, agg_mode=None, keepdims=False, **kwargs):
+        self.scale=scale
+        if agg_mode not in ['sum', 'mean', 'min', 'max', None]:
+            raise ValueError('Invalid aggregate mode. '
+                             'aggregate mode should be one of '
+                             '{"sum", "mean", "min", "max", None}')
+        self.agg_mode = agg_mode
+        self.keepdims = keepdims
+        super(AttentionScaledDotProduct, self).__init__(**kwargs)
+
+    def call(self, inputs):
+        """
+        分别利用query中的每一步状态对齐key中各步状态，得到权重
+        :param inputs: 列表， 按顺序存放query,key,value
+        :return:  注意力对齐结果
+        """
+        querys = inputs[0]  # Querys
+        keys = inputs[1]  # Keys
+        values = inputs[2]  # Values
+        weight_margins = K.batch_dot(querys, K.permute_dimensions(keys, [0, 2, 1]))
+        if self.scale:
+            k = K.int_shape(querys)[-1]
+            weight_margins = weight_margins/np.sqrt(k)
+        weights = softmax(weight_margins, axis=-1)
+        outputs = K.batch_dot(weights, values)
+        if self.agg_mode == 'max':
+            outputs = K.max(outputs, axis=-2, keepdims=self.keepdims)
+        elif self.agg_mode == 'min':
+            outputs = K.min(outputs, axis=-2, keepdims=self.keepdims)
+        elif self.agg_mode == 'mean':
+            outputs = K.mean(outputs, axis=-2, keepdims=self.keepdims)
+        elif self.agg_mode == 'sum':
+            outputs = K.sum(outputs, axis=-2, keepdims=self.keepdims)
+        elif self.agg_mode is None:
+            pass
+        return outputs
+
+    def compute_output_shape(self, input_shape):
+        if isinstance(input_shape, list):
+            xs = [K.placeholder(shape=shape) for shape in input_shape]
+            x = self.call(xs)
+        else:
+            x = K.placeholder(shape=input_shape)
+            x = self.call(x)
+        if isinstance(x, list):
+            return [K.int_shape(x_elem) for x_elem in x]
+        else:
+            return K.int_shape(x)
+
+
+class MultiHeadAttention(Layer):
+    """
+    [Ref] Attention is all you need. https://arxiv.org/pdf/1706.03762.pdf
+    """
+    def __init__(self, attention_blocks, dk=128, initializer="glorot_uniform", regularizer=None,
+                 constraint=None, **kwargs):
+        assert len(attention_blocks) >= 2
+        self.attention_blocks = attention_blocks
+        self.head_num = len(attention_blocks)
+        self.dk = dk
+        self.initializer = initializer
+        self.regularizer = regularizer
+        self.constraint = constraint
+        super(MultiHeadAttention, self).__init__(**kwargs)
+
+    def build(self, input_shape):
+        d_model = input_shape[-1]
+        self.WQ = []
+        self.WK = []
+        self.WV = []
+        for i in range(self.head_num):
+            wq = self.add_weight(name="{0}_WQ{1}".format(self.name, i),
+                                 shape=(d_model, self.dk),
+                                 initializer=self.initializer,
+                                 regularizer=self.regularizer,
+                                 constraint=self.constraint)
+            wk = self.add_weight(name="{0}_WK{1}".format(self.name, i),
+                                 shape=(d_model, self.dk),
+                                 initializer=self.initializer,
+                                 regularizer=self.regularizer,
+                                 constraint=self.constraint)
+            wv = self.add_weight(name="{0}_WV{1}".format(self.name, i),
+                                 shape=(d_model, d_model),
+                                 initializer=self.initializer,
+                                 regularizer=self.regularizer,
+                                 constraint=self.constraint)
+            self.WQ.append(wq)
+            self.WK.append(wk)
+            self.WV.append(wv)
+
+        self.wo = self.add_weight(name="{0}_WO".format(self.name),
+                                  shape=(self.head_num*d_model, d_model),
+                                  initializer=self.initializer,
+                                  regularizer=self.regularizer,
+                                  constraint=self.constraint)
+        super(MultiHeadAttention, self).build(input_shape)
+
+    def call(self, inputs):
+        attention_out = []
+        for i in range(self.head_num):
+            query = K.dot(inputs[0], self.WQ[i])
+            key = K.dot(inputs[1], self.WK[i])
+            value = K.dot(inputs[2], self.WV[i])
+            out_put = self.attention_blocks[i]([query, key, value])
+            attention_out.append(out_put)
+        concat_out = Concatenate()(attention_out)
+        out_puts = K.dot(concat_out, self.wo)
+        return out_puts
+
+    def compute_output_shape(self, input_shape):
+        if isinstance(input_shape, list):
+            xs = [K.placeholder(shape=shape) for shape in input_shape]
+            x = self.call(xs)
+        else:
+            x = K.placeholder(shape=input_shape)
+            x = self.call(x)
+        if isinstance(x, list):
+            return [K.int_shape(x_elem) for x_elem in x]
+        else:
+            return K.int_shape(x)
+
 
 class AttentionConcat(Layer):
 
