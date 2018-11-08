@@ -295,40 +295,40 @@ class AttentionScaledDotProduct(Layer):
         else:
             return K.int_shape(x)
 
-
 class MultiHeadAttention(Layer):
     """
     [Ref] Attention is all you need. https://arxiv.org/pdf/1706.03762.pdf
     """
-    def __init__(self, attention_blocks, dk=128, initializer="glorot_uniform", regularizer=None,
+    def __init__(self, attention_blocks, dk=64, dv=64, dmodel=512, initializer="glorot_uniform", regularizer=None,
                  constraint=None, **kwargs):
         assert len(attention_blocks) >= 2
         self.attention_blocks = attention_blocks
         self.head_num = len(attention_blocks)
         self.dk = dk
+        self.dv = dv
+        self.dmodel = dmodel
         self.initializer = initializer
         self.regularizer = regularizer
         self.constraint = constraint
         super(MultiHeadAttention, self).__init__(**kwargs)
 
     def build(self, input_shape):
-        d_model = input_shape[-1]
         self.WQ = []
         self.WK = []
         self.WV = []
         for i in range(self.head_num):
             wq = self.add_weight(name="{0}_WQ{1}".format(self.name, i),
-                                 shape=(d_model, self.dk),
+                                 shape=(self.dmodel, self.dk),
                                  initializer=self.initializer,
                                  regularizer=self.regularizer,
                                  constraint=self.constraint)
             wk = self.add_weight(name="{0}_WK{1}".format(self.name, i),
-                                 shape=(d_model, self.dk),
+                                 shape=(self.dmodel, self.dk),
                                  initializer=self.initializer,
                                  regularizer=self.regularizer,
                                  constraint=self.constraint)
             wv = self.add_weight(name="{0}_WV{1}".format(self.name, i),
-                                 shape=(d_model, d_model),
+                                 shape=(self.dmodel, self.dv),
                                  initializer=self.initializer,
                                  regularizer=self.regularizer,
                                  constraint=self.constraint)
@@ -337,7 +337,7 @@ class MultiHeadAttention(Layer):
             self.WV.append(wv)
 
         self.wo = self.add_weight(name="{0}_WO".format(self.name),
-                                  shape=(self.head_num*d_model, d_model),
+                                  shape=(self.head_num*self.dv, self.dmodel),
                                   initializer=self.initializer,
                                   regularizer=self.regularizer,
                                   constraint=self.constraint)
