@@ -722,8 +722,7 @@ class MixedAggregation(Layer):
         x = K.permute_dimensions(x, pattern=[0, 1, 3, 2])
         weights = K.tanh(K.dot(x, self.W1) + K.dot(self.vm, self.W2))
         weights = K.dot(weights, K.transpose(self.vm))
-        weights = K.squeeze(weights, axis=-1)
-        weights = K.expand_dims(softmax(weights, axis=-2), axis=-1)
+        weights = softmax(weights, axis=-2)
         outputs = K.sum(x*weights, axis=-2)
         return outputs
 
