@@ -17,6 +17,9 @@ from keras.initializers import orthogonal, random_normal
 from keras.activations import softmax
 from keras.layers import Concatenate
 
+"""
+主要实现了一些注意力层
+"""
 
 class LayerNormalization(Layer):
     """
