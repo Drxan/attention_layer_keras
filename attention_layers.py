@@ -18,7 +18,7 @@ from keras.activations import softmax
 from keras.layers import Concatenate
 
 """
-主要实现了一些注意力层
+主要实现了一些注意力层, 多数注意力层参考论文《Multiway Attention Networks for Modeling Sentence Pairs》
 """
 
 class LayerNormalization(Layer):
