@@ -367,7 +367,90 @@ class MultiHeadAttention(Layer):
         else:
             return K.int_shape(x)
 
+class SelfAttentionWeight(Layer):
+    """
+       输入x为shape=[batch_size,time_step,feature_dim]的序列。构造一个外部权重向量(表示文本的潜在语义向量)W，shape=(1,feature_dim),利用W对齐
+       x中的每一个时间步以得到各个时间步状态量的权重，利用权重对各个时间步求和或进行其他处理，得到最终输出。
+    """
+    def __init__(self, agg_mode='sum', W_regularizer=None, b_regularizer=None, W_constraint=None, b_constraint=None,
+                 bias=True, keepdims=False, **kwargs):
+        if agg_mode not in ['sum', 'mean', 'min', 'max', None]:
+            raise ValueError('Invalid aggregate mode. '
+                             'aggregate mode should be one of '
+                             '{"sum", "mean", "min", "max", None}')
+        self.supports_masking = True
+        self.init = initializers.get('glorot_uniform')
 
+        self.W_regularizer = regularizers.get(W_regularizer)
+        self.b_regularizer = regularizers.get(b_regularizer)
+
+        self.W_constraint = constraints.get(W_constraint)
+        self.b_constraint = constraints.get(b_constraint)
+
+        self.bias = bias
+        self.keepdims = keepdims
+        self.agg_mode = agg_mode
+        super(SelfAttentionWeight, self).__init__(**kwargs)
+
+    def build(self, input_shape):
+        assert len(input_shape) == 3
+
+        self.W = self.add_weight((input_shape[-1],),
+                                 initializer=self.init,
+                                 name='{}_W'.format(self.name),
+                                 regularizer=self.W_regularizer,
+                                 constraint=self.W_constraint)
+        self.features_dim = input_shape[-1]
+        self.step_dim = input_shape[-2]
+
+        if self.bias:
+            self.b = self.add_weight((input_shape[1],),
+                                     initializer='zero',
+                                     name='{}_b'.format(self.name),
+                                     regularizer=self.b_regularizer,
+                                     constraint=self.b_constraint)
+        else:
+            self.b = None
+
+        self.built = True
+
+    def compute_mask(self, input, input_mask=None):
+        return None
+
+    def call(self, x, mask=None):
+        eij = K.dot(x, K.reshape(self.W, (-1, 1)))
+        eij = K.squeeze(eij, axis=-1)
+
+        if self.bias:
+            eij += self.b
+
+        eij = K.tanh(eij)
+
+        a = K.exp(eij)
+
+        if mask is not None:
+            a *= K.cast(mask, K.floatx())
+
+        a /= K.cast(K.sum(a, axis=1, keepdims=True) + K.epsilon(), K.floatx())
+
+        a = K.expand_dims(a)
+        outputs = x * a
+        if self.agg_mode == 'max':
+            outputs = K.max(outputs, axis=-2, keepdims=self.keepdims)
+        elif self.agg_mode == 'min':
+            outputs = K.min(outputs, axis=-2, keepdims=self.keepdims)
+        elif self.agg_mode == 'mean':
+            outputs = K.mean(outputs, axis=-2, keepdims=self.keepdims)
+        elif self.agg_mode == 'sum':
+            outputs = K.sum(outputs, axis=-2, keepdims=self.keepdims)
+        elif self.agg_mode is None:
+            pass
+        return outputs
+
+    def compute_output_shape(self, input_shape):
+        return input_shape[0],  self.features_dim
+
+    
 class AttentionConcat(Layer):
 
     def __init__(self, **kwargs):
