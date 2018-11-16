@@ -298,7 +298,7 @@ class AttentionScaledDotProduct(Layer):
         else:
             return K.int_shape(x)
 
-class MultiHeadAttention(Layer):
+class MultiHeadSelfAttention(Layer):
     """
     [Ref] Attention is all you need. https://arxiv.org/pdf/1706.03762.pdf
     """
@@ -308,12 +308,12 @@ class MultiHeadAttention(Layer):
         self.attention_blocks = attention_blocks
         self.head_num = len(attention_blocks)
         self.dk = dk
-        self.dv = dv
-        self.dmodel = dmodel
+        self.dv=dv
+        self.dmodel=dmodel
         self.initializer = initializer
         self.regularizer = regularizer
         self.constraint = constraint
-        super(MultiHeadAttention, self).__init__(**kwargs)
+        super(MultiHeadSelfAttention, self).__init__(**kwargs)
 
     def build(self, input_shape):
         self.WQ = []
@@ -344,7 +344,7 @@ class MultiHeadAttention(Layer):
                                   initializer=self.initializer,
                                   regularizer=self.regularizer,
                                   constraint=self.constraint)
-        super(MultiHeadAttention, self).build(input_shape)
+        super(MultiHeadSelfAttention, self).build(input_shape)
 
     def call(self, inputs):
         attention_out = []
@@ -357,6 +357,55 @@ class MultiHeadAttention(Layer):
         concat_out = Concatenate()(attention_out)
         out_puts = K.dot(concat_out, self.wo)
         return out_puts
+
+    def compute_output_shape(self, input_shape):
+        if isinstance(input_shape, list):
+            xs = [K.placeholder(shape=shape) for shape in input_shape]
+            x = self.call(xs)
+        else:
+            x = K.placeholder(shape=input_shape)
+            x = self.call(x)
+        if isinstance(x, list):
+            return [K.int_shape(x_elem) for x_elem in x]
+        else:
+            return K.int_shape(x)
+        
+class MultiHeadAttention(Layer):
+    """
+    注意力组装器。需提供一组注意力层，其中每个注意力层对象将原始文本序列进行加权组合得到综合语义向量。该组装器将各个综合语义向量拼接。
+    """
+    def __init__(self, attentions, orthogonal_loss=True, gama=0.1, **kwargs):
+        """
+        :param attentions:  注意力层对象列表
+        :param orthogonal_loss: 是否对不同注意力层的输出进行正交正则化，如果为True，会把各个注意力向量相互之间的点积作为正则化损失项添加进目标损失函数
+        :param gama: 正交损失系数，越大表示正交损失在总损失比重越大
+        :param kwargs: 其他参数
+        """
+        self.attentions = attentions
+        self.orthogonal_loss = orthogonal_loss
+        self.gama = gama
+        super(MultiHeadAttention, self).__init__(**kwargs)
+
+    def call(self, inputs):
+        vecs = []
+        for att in self.attentions:
+            att_vec = att(inputs)
+            att_vec = K.expand_dims(att_vec, axis=-2)
+            vecs.append(att_vec)
+        vecs = Concatenate(axis=-2)(vecs)
+
+        if self.orthogonal_loss:
+            vec_norm = K.l2_normalize(vecs, axis=-1)
+            mult = K.batch_dot(vec_norm, K.permute_dimensions(vec_norm, [0, 2, 1]))
+            vec_shape = K.int_shape(vec_norm)
+            dim = vec_shape[1]
+            eye_mat = K.eye(dim, dtype=K.dtype(vec_norm))
+            eye_mat = K.expand_dims(eye_mat, axis=0)
+            diffs = K.square(mult-eye_mat)
+            # 简单的对所有向量点积求平均，这里忽略了对角元素的影响，实际应为各个非对角元素求平均
+            loss_value = K.mean(diffs) * self.gama
+            self.add_loss(loss_value, inputs=inputs)
+        return vecs
 
     def compute_output_shape(self, input_shape):
         if isinstance(input_shape, list):
